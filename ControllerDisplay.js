@@ -245,9 +245,11 @@ class ControllerDisplay {
         let deltaTimeSeconds = 0;
         this.updateTexture(data);
 
+        data.timestamp = this.lastTimestamp + 0.1;
+        
         if (this.lastTimestamp) {
             deltaTimeSeconds = (data.timestamp - this.lastTimestamp);
-
+            
             this.ahrs.update(
                 data.gyro[0],
                 data.gyro[1],
@@ -287,6 +289,8 @@ class ControllerDisplay {
         const {x, y, z, w} = this.ahrs.getQuaternion();
         this.gearVRController.quaternion.set(x, z, -y, w);
 
+        
+        
         if (data.homeButton) {
             this.lastZeroQuaternion = this.gearVRController.quaternion.clone().inverse();
             this.log(`Re-zeroed orientation! ${(new Date()).valueOf()}`);

@@ -27,25 +27,66 @@ class ControllerBluetoothInterface {
         if (this.onDeviceDisconnected) {
             device.addEventListener('gattserverdisconnected', onDeviceDisconnected);
         }
+        console.log("GearVR Connected:");
+        console.log(device);
 
         return device.gatt.connect();
     }
 
     pair() {
         return navigator.bluetooth.requestDevice({
-            acceptAllDevices: true,
+            filters: [
+                {namePrefix: 'Gear VR'}
+            ],
+            // acceptAllDevices: true,
             optionalServices: [
-                ControllerBluetoothInterface.UUID_CUSTOM_SERVICE
+                ControllerBluetoothInterface.UUID_CUSTOM_SERVICE,
+                'battery_service'
             ]
         })
             .then(this.onDeviceConnected)
             .then(gattServer => this.gattServer = gattServer)
 
+            .then(server => {
+                console.log('Getting Battery Service...');
+                return server.getPrimaryService('battery_service');
+              })
+              .then(service => {
+                console.log('Getting Battery Level Characteristic...');
+                return service.getCharacteristic('battery_level');
+              })
+              .then(characteristic => {
+                console.log('Reading Battery Level...');
+                return characteristic.readValue();
+              })
+              .then(value => {
+                let batteryLevel = value.getUint8(0);
+                console.log('> Battery Level is ' + batteryLevel + '%');
+              })
+
             // Get custom service
             .then(() => this.gattServer.getPrimaryService(ControllerBluetoothInterface.UUID_CUSTOM_SERVICE))
             .then(customService => this.customService = customService)
 
-            //todo: battery service, device information service
+            // Getting battery service
+            .then(server => {
+                console.log('Getting Battery Service...');
+                return this.gattServer.getPrimaryService('battery_service');
+              })
+              .then(service => {
+                console.log('Getting Battery Level Characteristic...');
+                return service.getCharacteristic('battery_level');
+              })
+              .then(characteristic => {
+                console.log('Reading Battery Level...');
+                return characteristic.readValue();
+              })
+              .then(value => {
+                let batteryLevel = value.getUint8(0);
+                console.log('> Battery Level is ' + batteryLevel + '%');
+              })
+
+            // TODO: device information service
 
             .then(() => this.customService
                 .getCharacteristic(ControllerBluetoothInterface.UUID_CUSTOM_SERVICE_WRITE)
@@ -67,6 +108,7 @@ class ControllerBluetoothInterface {
 
     onNotificationReceived(e) {
         const {buffer}  = e.target.value;
+        
         const eventData = new Uint8Array(buffer);
 
         // Max observed value = 315
@@ -83,8 +125,25 @@ class ControllerBluetoothInterface {
         ) & 0x3FF;
 
         // com.samsung.android.app.vr.input.service/ui/c.class:L222
-        const timestamp = ((new Int32Array(buffer.slice(0, 3))[0]) & 0xFFFFFFFF) / 1000 * ControllerBluetoothInterface.TIMESTAMP_FACTOR;
+        let timestamp = 1;
+        
 
+        
+        try {
+            timestamp = ((new Int32Array(buffer.slice(0, 4))[0]) & 0xFFFFFFFF) / 1000 * ControllerBluetoothInterface.TIMESTAMP_FACTOR;
+        } catch(e) {
+            if (buffer && buffer.byteLength !== 60) { 
+                console.warn("received wrong bytelength, will restart tracking");
+                controllerBluetoothInterface.runCommand(ControllerBluetoothInterface.CMD_SENSOR);
+                return true; 
+            } else {
+                console.log("Error reading buffer!");
+                console.log(e);
+            }
+        }
+        
+        
+        // const timestamp = 1;
         // com.samsung.android.app.vr.input.service/ui/c.class:L222
         const temperature = eventData[57];
 
@@ -99,6 +158,7 @@ class ControllerBluetoothInterface {
             getAccelerometerFloatWithOffsetFromArrayBufferAtIndex(buffer, 4, 0),
             getAccelerometerFloatWithOffsetFromArrayBufferAtIndex(buffer, 6, 0),
             getAccelerometerFloatWithOffsetFromArrayBufferAtIndex(buffer, 8, 0),
+
             // getAccelerometerFloatWithOffsetFromArrayBufferAtIndex(buffer, 4, 1),
             // getAccelerometerFloatWithOffsetFromArrayBufferAtIndex(buffer, 6, 1),
             // getAccelerometerFloatWithOffsetFromArrayBufferAtIndex(buffer, 8, 1),
@@ -111,6 +171,7 @@ class ControllerBluetoothInterface {
             getGyroscopeFloatWithOffsetFromArrayBufferAtIndex(buffer, 10, 0),
             getGyroscopeFloatWithOffsetFromArrayBufferAtIndex(buffer, 12, 0),
             getGyroscopeFloatWithOffsetFromArrayBufferAtIndex(buffer, 14, 0),
+
             // getGyroscopeFloatWithOffsetFromArrayBufferAtIndex(buffer, 10, 1),
             // getGyroscopeFloatWithOffsetFromArrayBufferAtIndex(buffer, 12, 1),
             // getGyroscopeFloatWithOffsetFromArrayBufferAtIndex(buffer, 14, 1),
@@ -129,6 +190,29 @@ class ControllerBluetoothInterface {
         const touchpadButton   = Boolean(eventData[58] & (1 << 3));
         const volumeUpButton   = Boolean(eventData[58] & (1 << 4));
         const volumeDownButton = Boolean(eventData[58] & (1 << 5));
+
+
+        if (triggerButton) {
+            console.log("GearVR: TRIGGER");
+        }
+        if (homeButton) {
+            console.log("GearVR: HOME");
+        }
+        if (volumeUpButton) {
+            console.log("GearVR: VOLUME UP");
+        }
+        if (volumeDownButton) {
+            console.log("GearVR: VOLUME DOWN");
+        }
+        if (backButton) {
+            console.log("GearVR: BACK")
+        }
+        if (touchpadButton) {
+            console.log("GearVR: TOUCHPAD")
+        }
+        if (axisX && axisY) {
+            console.log(`GearVR: TOUCHPAD ${axisX} x ${axisY}`)
+        }
 
         this.onControllerDataReceived({
             accel,
@@ -180,17 +264,17 @@ ControllerBluetoothInterface.TIMESTAMP_FACTOR = 0.001; // to seconds
 
 ControllerBluetoothInterface.getAccelerometerFloatWithOffsetFromArrayBufferAtIndex = (arrayBuffer, offset, index) => {
     const arrayOfShort = new Int16Array(arrayBuffer.slice(16 * index + offset, 16 * index + offset + 2));
-    return (new Float32Array([arrayOfShort[0] * 10000.0 * 9.80665 / 2048.0]))[0];
+    return (new Float32Array([arrayOfShort[0] * 10000.0 * 9.80665 / 2048.0]))[0] || 0;
 };
 
 ControllerBluetoothInterface.getGyroscopeFloatWithOffsetFromArrayBufferAtIndex = (arrayBuffer, offset, index) => {
     const arrayOfShort = new Int16Array(arrayBuffer.slice(16 * index + offset, 16 * index + offset + 2));
-    return (new Float32Array([arrayOfShort[0] * 10000.0 * 0.017453292 / 14.285]))[0];
+    return (new Float32Array([arrayOfShort[0] * 10000.0 * 0.017453292 / 14.285]))[0] || 0;
 };
 
 ControllerBluetoothInterface.getMagnetometerFloatWithOffsetFromArrayBufferAtIndex = (arrayBuffer, offset) => {
     const arrayOfShort = new Int16Array(arrayBuffer.slice(32 + offset, 32 + offset + 2));
-    return (new Float32Array([arrayOfShort[0] * 0.06]))[0];
+    return (new Float32Array([arrayOfShort[0] * 0.06]))[0] || 0;
 };
 
 ControllerBluetoothInterface.getLength = (f1, f2, f3) => Math.sqrt(f1 ** 2 + f2 ** 2 + f3 ** 2);
